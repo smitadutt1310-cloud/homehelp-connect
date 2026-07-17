@@ -28,6 +28,3 @@ export function createSupabaseClient(): SupabaseClient {
   browserClient = createClient(url, anonKey);
   return browserClient;
 }
-
-/** Reusable default client instance for imports across the app. */
-export const supabase = createSupabaseClient();

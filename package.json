@@ -6,7 +6,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed --project=chromium",
+    "dev:demo": "next dev",
+    "demo": "playwright test --project=chromium --headed tests/demo-autorun.spec.ts",
+    "demo:run": "playwright test --project=chromium tests/demo-autorun.spec.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.0",

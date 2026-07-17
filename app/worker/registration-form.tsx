@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { createSupabaseClient } from "@/lib/supabase";
+import { createDemoRegistrationData } from "@/lib/demo-registration-data";
 import {
   BilingualButtonText,
   BilingualHelperText,
@@ -242,10 +245,178 @@ function StepProgress({ currentStep }: { currentStep: number }) {
   );
 }
 
+function mapGenderToDatabase(gender: string): string {
+  if (gender === "female") {
+    return "Female";
+  }
+  if (gender === "male") {
+    return "Male";
+  }
+  return "Other";
+}
+
+function mapChargesToDatabase(charges: Record<string, string>): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(charges)
+      .filter(([, value]) => value.trim() !== "")
+      .map(([key, value]) => [key, Number.parseInt(value, 10)]),
+  );
+}
+
+function logSupabaseSaveError(error: unknown) {
+  console.error("House Help registration save failed:", error);
+
+  if (error && typeof error === "object") {
+    const supabaseError = error as {
+      message?: string;
+      code?: string;
+      details?: string;
+      hint?: string;
+    };
+
+    console.error("Supabase error details:", {
+      message: supabaseError.message,
+      code: supabaseError.code,
+      details: supabaseError.details,
+      hint: supabaseError.hint,
+    });
+  }
+}
+
+function getSupabaseSaveErrorMessage(error: unknown): string {
+  if (
+    error instanceof Error &&
+    error.message.includes("Missing Supabase environment variables")
+  ) {
+    return "Supabase is not configured. Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to .env.local, then restart the dev server.";
+  }
+
+  if (error && typeof error === "object") {
+    const supabaseError = error as {
+      message?: string;
+      code?: string;
+    };
+
+    if (
+      supabaseError.message?.toLowerCase().includes("invalid api key") ||
+      supabaseError.message?.toLowerCase().includes("secret api key") ||
+      supabaseError.code === "PGRST301"
+    ) {
+      if (supabaseError.message?.toLowerCase().includes("secret api key")) {
+        return "You are using a Secret API key in the browser. In .env.local, set NEXT_PUBLIC_SUPABASE_ANON_KEY to the anon public or publishable key only (Supabase Dashboard → Project Settings → API). Never use the service_role or secret key in NEXT_PUBLIC_ variables. Restart npm run dev after changing it.";
+      }
+
+      return "Supabase API key is invalid. Replace NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local with your real anon or publishable key from Supabase Dashboard → Project Settings → API, then restart npm run dev.";
+    }
+
+    if (supabaseError.code === "23505") {
+      return "A profile with this phone number already exists. Please use a different phone number.";
+    }
+
+    if (supabaseError.code === "23514") {
+      return "Some profile details do not match the required format. Please review your entries and try again.";
+    }
+
+    if (supabaseError.message) {
+      return `We could not save your profile: ${supabaseError.message}`;
+    }
+  }
+
+  return "We could not save your profile. Please try again.";
+}
+
+const PHONE_NUMBER_LENGTH = 10;
+
+function sanitizePhoneInput(value: string): string {
+  return value.replace(/\D/g, "").slice(0, PHONE_NUMBER_LENGTH);
+}
+
+function isValidTenDigitPhone(value: string): boolean {
+  return /^\d{10}$/.test(value.trim());
+}
+
+function getStep1ValidationError(
+  fullName: string,
+  phoneNumber: string,
+  whatsappNumber: string,
+  sameAsPhone: boolean,
+  gender: string,
+  age: string,
+): { en: string; ta: string } | null {
+  if (fullName.trim() === "") {
+    return {
+      en: "Please complete all required fields before continuing.",
+      ta: "தொடர அனைத்து தேவையான புலங்களையும் நிரப்பவும்",
+    };
+  }
+
+  if (!isValidTenDigitPhone(phoneNumber)) {
+    return {
+      en: "Please enter a valid 10-digit phone number.",
+      ta: "தயவுசெய்து செல்லுபடியாகும் 10 இலக்க தொலைபேசி எண்ணை உள்ளிடவும்",
+    };
+  }
+
+  const resolvedWhatsapp = sameAsPhone ? phoneNumber : whatsappNumber;
+  if (!isValidTenDigitPhone(resolvedWhatsapp)) {
+    return {
+      en: "Please enter a valid 10-digit WhatsApp number.",
+      ta: "தயவுசெய்து செல்லுபடியாகும் 10 இலக்க வாட்ஸ்அப் எண்ணை உள்ளிடவும்",
+    };
+  }
+
+  if (gender === "") {
+    return {
+      en: "Please complete all required fields before continuing.",
+      ta: "தொடர அனைத்து தேவையான புலங்களையும் நிரப்பவும்",
+    };
+  }
+
+  if (age.trim() === "") {
+    return {
+      en: "Please complete all required fields before continuing.",
+      ta: "தொடர அனைத்து தேவையான புலங்களையும் நிரப்பவும்",
+    };
+  }
+
+  return null;
+}
+
+function isDemoModeFromParams(
+  searchParams: { get: (key: string) => string | null },
+): boolean {
+  if (process.env.NODE_ENV !== "development") {
+    return false;
+  }
+
+  return (
+    process.env.NEXT_PUBLIC_DEMO_AUTOFILL === "true" ||
+    searchParams.get("demo") === "1"
+  );
+}
+
+function isDemoAutorunFromParams(
+  searchParams: { get: (key: string) => string | null },
+): boolean {
+  return (
+    isDemoModeFromParams(searchParams) &&
+    (process.env.NEXT_PUBLIC_DEMO_AUTORUN === "true" ||
+      searchParams.get("autorun") === "1")
+  );
+}
+
 export function RegistrationForm() {
+  const searchParams = useSearchParams();
+  const formRef = useRef<HTMLFormElement>(null);
+  const demoAppliedRef = useRef(false);
+  const demoAutorunStartedRef = useRef(false);
+
   const [step, setStep] = useState(1);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
   const [step1Error, setStep1Error] = useState("");
+  const [step1ErrorTa, setStep1ErrorTa] = useState("");
   const [step2PrimarySkillError, setStep2PrimarySkillError] = useState("");
   const [step2Error, setStep2Error] = useState("");
 
@@ -266,9 +437,44 @@ export function RegistrationForm() {
 
   const draftHydratedRef = useRef(false);
   const lastSavedDraftRef = useRef<string | null>(null);
+  const [demoReady, setDemoReady] = useState(false);
+
+  function applyDemoRegistrationData() {
+    const demo = createDemoRegistrationData();
+
+    setFullName(demo.fullName);
+    setPhoneNumber(demo.phoneNumber);
+    setWhatsappNumber(demo.whatsappNumber);
+    setSameAsPhone(demo.sameAsPhone);
+    setGender(demo.gender);
+    setAge(demo.age);
+    setPrimarySkill(demo.primarySkill);
+    setYearsOfExperience(demo.yearsOfExperience);
+    setServicesOffered(demo.servicesOffered);
+    setAvailabilityTimeSlots(demo.availabilityTimeSlots);
+    setServiceCharges(demo.serviceCharges);
+    setCity(demo.city);
+    setArea(demo.area);
+    setApartmentCommunity(demo.apartmentCommunity);
+    setStep1Error("");
+    setStep1ErrorTa("");
+    setStep2PrimarySkillError("");
+    setStep2Error("");
+    setSaveError("");
+    setDemoReady(true);
+    console.log("Demo registration data applied.");
+  }
 
   useEffect(() => {
     console.log("Loading registration draft...");
+
+    if (isDemoModeFromParams(searchParams) && !demoAppliedRef.current) {
+      clearRegistrationDraft(lastSavedDraftRef);
+      draftHydratedRef.current = true;
+      demoAppliedRef.current = true;
+      applyDemoRegistrationData();
+      return;
+    }
 
     const raw = localStorage.getItem(REGISTRATION_DRAFT_KEY);
     if (!raw) {
@@ -301,7 +507,25 @@ export function RegistrationForm() {
     lastSavedDraftRef.current = raw;
     console.log("Registration draft restored.");
     draftHydratedRef.current = true;
-  }, []);
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (!demoReady || demoAutorunStartedRef.current || !isDemoAutorunFromParams(searchParams)) {
+      return;
+    }
+
+    demoAutorunStartedRef.current = true;
+
+    const timers = [
+      setTimeout(() => setStep(2), 700),
+      setTimeout(() => setStep(3), 1400),
+      setTimeout(() => formRef.current?.requestSubmit(), 2100),
+    ];
+
+    return () => {
+      timers.forEach((timer) => clearTimeout(timer));
+    };
+  }, [demoReady, searchParams]);
 
   useEffect(() => {
     if (!draftHydratedRef.current || saveSuccess) {
@@ -364,9 +588,23 @@ export function RegistrationForm() {
   );
 
   function handlePhoneChange(value: string) {
-    setPhoneNumber(value);
+    const sanitized = sanitizePhoneInput(value);
+    setPhoneNumber(sanitized);
     if (sameAsPhone) {
-      setWhatsappNumber(value);
+      setWhatsappNumber(sanitized);
+    }
+    if (step1Error) {
+      setStep1Error("");
+      setStep1ErrorTa("");
+    }
+  }
+
+  function handleWhatsappChange(value: string) {
+    const sanitized = sanitizePhoneInput(value);
+    setWhatsappNumber(sanitized);
+    if (step1Error) {
+      setStep1Error("");
+      setStep1ErrorTa("");
     }
   }
 
@@ -410,23 +648,25 @@ export function RegistrationForm() {
     });
   }
 
-  function isStep1Valid() {
-    const resolvedWhatsapp = sameAsPhone ? phoneNumber : whatsappNumber;
-    return (
-      fullName.trim() !== "" &&
-      phoneNumber.trim() !== "" &&
-      resolvedWhatsapp.trim() !== "" &&
-      gender !== "" &&
-      age.trim() !== ""
-    );
-  }
-
   function handleNext() {
-    if (step === 1 && !isStep1Valid()) {
-      setStep1Error("Please complete all required fields before continuing.");
-      return;
+    if (step === 1) {
+      const validationError = getStep1ValidationError(
+        fullName,
+        phoneNumber,
+        whatsappNumber,
+        sameAsPhone,
+        gender,
+        age,
+      );
+
+      if (validationError) {
+        setStep1Error(validationError.en);
+        setStep1ErrorTa(validationError.ta);
+        return;
+      }
     }
     setStep1Error("");
+    setStep1ErrorTa("");
 
     if (step === 2) {
       let hasStep2Error = false;
@@ -455,36 +695,64 @@ export function RegistrationForm() {
 
   function handlePrevious() {
     setStep1Error("");
+    setStep1ErrorTa("");
     setStep2PrimarySkillError("");
     setStep2Error("");
     setStep((current) => Math.max(current - 1, 1));
   }
 
-  function handleSaveProfile(event: React.FormEvent) {
+  async function handleSaveProfile(event: React.FormEvent) {
     event.preventDefault();
+    setSaveError("");
 
-    const formData = {
-      fullName: fullName.trim(),
-      phoneNumber: phoneNumber.trim(),
-      whatsappNumber: sameAsPhone ? phoneNumber.trim() : whatsappNumber.trim(),
+    const validationError = getStep1ValidationError(
+      fullName,
+      phoneNumber,
+      whatsappNumber,
       sameAsPhone,
       gender,
-      age: age.trim(),
-      primarySkill,
-      yearsOfExperience,
-      servicesOffered,
-      availabilityTimeSlots,
-      serviceCharges,
-      location: {
-        city: city.trim(),
-        area: area.trim(),
-        apartmentCommunity: apartmentCommunity.trim(),
-      },
+      age,
+    );
+
+    if (validationError) {
+      setSaveError(validationError.en);
+      return;
+    }
+
+    setIsSaving(true);
+
+    const profile = {
+      full_name: fullName.trim(),
+      phone: phoneNumber.trim(),
+      whatsapp: (sameAsPhone ? phoneNumber : whatsappNumber).trim(),
+      gender: mapGenderToDatabase(gender),
+      age: Number.parseInt(age.trim(), 10),
+      years_of_experience: yearsOfExperience,
+      primary_skill: primarySkill,
+      services: servicesOffered,
+      charges: mapChargesToDatabase(serviceCharges),
+      availability_slots: availabilityTimeSlots,
+      city: city.trim(),
+      area: area.trim(),
+      community: apartmentCommunity.trim(),
     };
 
-    console.log("House Help Registration:", formData);
-    clearRegistrationDraft(lastSavedDraftRef);
-    setSaveSuccess(true);
+    try {
+      const supabase = createSupabaseClient();
+      const { error } = await supabase.from("house_helper_profiles").insert(profile);
+
+      if (error) {
+        throw error;
+      }
+
+      clearRegistrationDraft(lastSavedDraftRef);
+      setSaveSuccess(true);
+    } catch (error) {
+      logSupabaseSaveError(error);
+      setSaveError(getSupabaseSaveErrorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   if (saveSuccess) {
@@ -504,7 +772,7 @@ export function RegistrationForm() {
   }
 
   return (
-    <form className="mt-8" onSubmit={handleSaveProfile}>
+    <form ref={formRef} className="mt-8" onSubmit={handleSaveProfile}>
       <StepProgress currentStep={step} />
 
       <div className="space-y-5 transition-opacity duration-300">
@@ -528,6 +796,8 @@ export function RegistrationForm() {
               <input
                 id="phone-number"
                 type="tel"
+                inputMode="numeric"
+                maxLength={PHONE_NUMBER_LENGTH}
                 className={inputClassName}
                 placeholder={bilingualPlaceholder("Enter phone number")}
                 value={phoneNumber}
@@ -545,10 +815,12 @@ export function RegistrationForm() {
               <input
                 id="whatsapp-number"
                 type="tel"
+                inputMode="numeric"
+                maxLength={PHONE_NUMBER_LENGTH}
                 className={inputClassName}
                 placeholder={bilingualPlaceholder("Enter WhatsApp number")}
                 value={whatsappNumber}
-                onChange={(event) => setWhatsappNumber(event.target.value)}
+                onChange={(event) => handleWhatsappChange(event.target.value)}
                 disabled={sameAsPhone}
               />
               <BilingualHelperText ta="வாட்ஸ்அப் எண்ணை உள்ளிடவும்" />
@@ -608,7 +880,7 @@ export function RegistrationForm() {
               <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
                 {step1Error}
                 <span className={`mt-1 block ${tamilTextClass}`}>
-                  (தொடர அனைத்து தேவையான புலங்களையும் நிரப்பவும்)
+                  ({step1ErrorTa})
                 </span>
               </p>
             )}
@@ -870,11 +1142,21 @@ export function RegistrationForm() {
               </div>
             </fieldset>
 
+            {saveError && (
+              <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+                {saveError}
+              </p>
+            )}
+
             <div className="flex flex-col gap-3 sm:flex-row">
               <button type="button" onClick={handlePrevious} className={secondaryButtonClassName}>
                 <BilingualButtonText en="Previous" ta="முந்தைய" />
               </button>
-              <button type="submit" className={primaryButtonClassName}>
+              <button
+                type="submit"
+                className={primaryButtonClassName}
+                disabled={isSaving}
+              >
                 <BilingualButtonText en="Save Profile" ta="சுயவிவரத்தை சேமிக்கவும்" />
               </button>
             </div>

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { BilingualStack, tamilTextClass } from "../components/bilingual-text";
 import { RegistrationForm } from "./registration-form";
 
@@ -30,7 +31,9 @@ export default function WorkerRegisterPage() {
           </p>
         </header>
 
-        <RegistrationForm />
+        <Suspense fallback={<p className="mt-8 text-center text-sm text-slate-500">Loading form...</p>}>
+          <RegistrationForm />
+        </Suspense>
       </article>
     </main>
   );

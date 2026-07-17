@@ -1,0 +1,21 @@
+export type HouseHelperProfile = {
+  id: string;
+  full_name: string;
+  phone: string;
+  whatsapp: string;
+  gender: string;
+  age: number;
+  years_of_experience: string;
+  primary_skill: string;
+  services: string[];
+  charges: Record<string, number>;
+  availability_slots: string[];
+  city: string;
+  area: string;
+  community: string;
+  looking_for_work: boolean;
+  phone_verified: boolean;
+  profile_photo_url: string | null;
+  created_at: string;
+  updated_at: string;
+};
